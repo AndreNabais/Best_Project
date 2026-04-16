@@ -15,10 +15,20 @@ class MyDsp : public AudioStream
     virtual void update(void);
     void setFreq(float freq);
     void setGain(float g);
+    void Envelope(float attack_val,float release_val);
+    void noteOn(float velocity);
+    void noteOff();
 
   private:
     Sine sine;
     float gain;
+    float StartGain;
+    bool NoteActive;
+    bool NoteReleased;
+    float stopTime;
+    float startTime;
+    float attack_val = 10.0f;  // Default 10ms
+    float release_val = 5.0f; // Default 50ms
 };
 
 #endif
