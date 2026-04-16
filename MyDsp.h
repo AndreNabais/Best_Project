@@ -5,14 +5,26 @@
 #include "AudioStream.h"
 #include "Audio.h"
 #include "Phasor.h"
+#include "Sine.h"
+#include "Noise.h"
+#include "Square.h"
 
 class MyDsp : public AudioStream
 {
   public:
     MyDsp();
     ~MyDsp();
-    
     virtual void update(void);
+    float compute_kick();
+    float compute_snare();
+    float compute_hihat();
+    float compute_tom();
+    float compute_cowbell();
+
+    // Counters to track how far into the "hit" we are
+    uint32_t kickSampleCount, snareSampleCount, hihatSampleCount, tomSampleCount, cowbellSampleCount;
+    bool kickActive, snareActive, hihatActive, tomActive, cowbellActive;
+    
     
     // Control functions
     void setFreq(float freq);
@@ -32,6 +44,14 @@ class MyDsp : public AudioStream
     float distortionThreshold;
 
   private:
+
+    // Internal synthesis components
+    Sine kickOsc;
+    Sine tomOsc;
+    Noise snareNoise;
+    Noise hihatNoise;
+    Square bellOsc1, bellOsc2; //2 square waves, one to 540Hz and the other to 800Hz. Use a medium to short release and short attack
+
     // Audio Generation
     Phasor phasor;
     int waveformType = 0;
