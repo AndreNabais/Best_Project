@@ -21,7 +21,36 @@ void MyDsp::setGain(float g){
   gain = g;
 }
 
+void MyDsp::noteOn(float velocity){
+  startTime = millis();
+  StartGain=velocity / 127.0;
+  NoteActive = true;
+  NoteReleased = false;
+}
+
+void MyDsp::noteOff(){
+  stopTime = millis();
+  NoteActive = false;
+  NoteReleased = true;
+}
+
+
+// create envelope
+void MyDsp::Envelope(float attack_val,float release_val){
+  if (NoteActive) {
+    //ATTACK
+    float duration_begin = millis() - startTime;
+    setGain((StartGain)*min(duration_begin/attack_val,1));
+  }
+  
+    else {
+    float duration_end = millis() - stopTime;
+    setGain((StartGain)*(1-duration_end/release_val));
+  }
+}
+
 void MyDsp::update(void) {
+  Envelope(attack_val, release_val);
   audio_block_t* outBlock[AUDIO_OUTPUTS];
   for (int channel = 0; channel < AUDIO_OUTPUTS; channel++) {
     outBlock[channel] = allocate();
