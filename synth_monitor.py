@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+
 """
 Teensy MIDI Synth Monitor - Bidirectional Version
 """
@@ -228,6 +228,39 @@ class SynthMonitor(tk.Tk):
         self.release_slider.set(500) # Default
         self.release_slider.pack(fill='x', padx=PAD, pady=(0, PAD))
 
+
+                # DRUM MACHINE SECTION
+        tk.Label(self, text="DRUM MACHINE", fg=ACCENT, bg=BG,
+                 font=self.med).pack(pady=(10, 10))
+
+        drum_frame = tk.Frame(self, bg=BG)
+        drum_frame.pack(pady=(0, PAD))
+
+        drum_buttons = [
+            ("KICK", "kick"),
+            ("SNARE", "snare"),
+            ("HIHAT", "hihat"),
+            ("TOM", "tom"),
+            ("COWBELL", "cowbell")
+        ]
+
+        for i, (label, drum_id) in enumerate(drum_buttons):
+            btn = tk.Button(
+                drum_frame,
+                text=label,
+                width=10,
+                height=2,
+                bg=PANEL,
+                fg=TEXT,
+                activebackground=ACCENT,
+                activeforeground=TEXT,
+                relief="flat",
+                command=lambda d=drum_id: self._trigger_drum(d)
+            )
+            btn.grid(row=i // 3, column=i % 3, padx=8, pady=8)
+
+
+
     def _on_data(self, volume, note, freq, gain, dist):
         with self._lock:
             self._volume = volume
@@ -265,6 +298,23 @@ class SynthMonitor(tk.Tk):
     def _on_close(self):
         self.reader.stop()
         self.destroy()
+
+# DRUM MACHINE BUTTONS
+
+    def _trigger_drum(self, drum_name):
+        """Send drum trigger command to Teensy"""
+        if self.reader.ser and self.reader.ser.is_open:
+            try:
+                cmd = f"DRUM:{drum_name}\n"
+                self.reader.ser.write(cmd.encode())
+            except Exception as e:
+                print(f"Error sending drum trigger: {e}")
+
+
+
+
+
+
      
     def _send_cmd(self, tag, value):
         """Helper to send A:val or R:val to Teensy"""
