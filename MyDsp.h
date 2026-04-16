@@ -5,37 +5,51 @@
 #include "AudioStream.h"
 #include "Audio.h"
 #include "Phasor.h"
-#include "Sine.h"
 
 class MyDsp : public AudioStream
 {
   public:
     MyDsp();
     ~MyDsp();
+    
     virtual void update(void);
+    
+    // Control functions
     void setFreq(float freq);
     void setGain(float g);
-    void Envelope(float attack_val,float release_val);
+    void setDist(float d);             // Update distortion threshold
+    void setWaveform(int type);        // Switch between Sine, Tri, Saw, Square
+    
+    // MIDI / Envelope functions
+    void Envelope(float attack_val, float release_val);
     void noteOn(float velocity);
     void noteOff();
 
+    void setAttack(float a);
+    void setRelease(float r);
+
+    // Distortion threshold needs to be accessible for the math in .cpp
+    float distortionThreshold;
+
   private:
-    Sine sine;
+    // Audio Generation
+    Phasor phasor;
+    int waveformType = 0;
+
+    // Gain and State
     float gain;
     float StartGain;
     bool NoteActive;
     bool NoteReleased;
-    float stopTime;
-    float startTime;
-    float attack_val = 10.0f;  // Default 10ms
-    float release_val = 50.0f; // Default 50ms
-    float velocity;
-    float sampleCount=0.0f;
-    float startSample=0.0f;
-    float stopSample=0.0f;
-    float SR = 48000.0f;
-
+    
+    // Sample-Accurate Timing (Replaces millis() variables)
+    uint32_t sampleCount; 
+    uint32_t startSample;
+    uint32_t stopSample;
+    
+    // Envelope Settings
+    float attack_val = 10.0f;   // Default 10ms
+    float release_val = 500.0f; // Default 500ms
 };
 
-#endif
 #endif
