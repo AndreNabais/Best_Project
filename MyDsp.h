@@ -28,7 +28,14 @@ class MyDsp : public AudioStream
     float stopTime;
     float startTime;
     float attack_val = 10.0f;  // Default 10ms
-    float release_val = 5.0f; // Default 50ms
+    float release_val = 50.0f; // Default 50ms
+    float velocity;
+    float sampleCount=0.0f;
+    float startSample=0.0f;
+    float stopSample=0.0f;
+    float SR = 48000.0f;
+
 };
 
+#endif
 #endif
