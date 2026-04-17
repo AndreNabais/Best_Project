@@ -1,6 +1,7 @@
-
+#!/usr/bin/env python3
 """
-Teensy MIDI Synth Monitor - Bidirectional Version
+BC-26: ELECTRONIC KEYBOARD + RHYTHM MAPPED
+Merged Version: Polyphonic Synth + Drum Machine Triggers
 """
 
 import sys
@@ -11,329 +12,249 @@ import serial
 import serial.tools.list_ports
 import re
 
-# ── Note name helper ────────────────────────────────────────────────────────
+# -- Authentic 80s Hardware Palette --
+CHASSIS_GRAY = "#C8C8B8"
+LCD_SCREEN   = "#2D302D"
+LED_ON       = "#FF3300"
+LABEL_NAVY   = "#1A237E"
+DECO_ORANGE  = "#FF8C00"
+OFF_WHITE    = "#F0F0E0"
+GREEN_ON     = "#00FF44"
+
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
 def midi_to_name(midi_note: int) -> str:
-    if midi_note == -2:
-        return "OFF"
-    if midi_note < 0:
-        return "—"
+    if midi_note == -2: return "OFF"
+    if midi_note < 0: return "---"
     octave = (midi_note // 12) - 1
-    name   = NOTE_NAMES[midi_note % 12]
-    return f"{name}{octave}"
+    return f"{NOTE_NAMES[midi_note % 12]}{octave}"
 
-# ── Serial reader (background thread) ───────────────────────────────────────
+def find_teensy_port():
+    ports = serial.tools.list_ports.comports()
+    print("=== SEARCHING FOR HARDWARE ===")
+    for p in ports:
+        print(f"  DETECTED: {p.device} | {p.description} | {p.hwid}")
+        
+        # 1. Check for hardware ID (16C0 is Teensy)
+        if "16C0" in p.hwid.upper():
+            print(f"  >>> MATCH FOUND (Teensy HWID): {p.device}")
+            return p.device
+            
+        # 2. Check for the specific name your Windows uses
+        if "dispositivo serie" in p.description.lower():
+            print(f"  >>> MATCH FOUND (Device Name): {p.device}")
+            return p.device
+            
+        # 3. Standard English checks
+        if "teensy" in p.description.lower() or "usb serial" in p.description.lower():
+            print(f"  >>> MATCH FOUND (Legacy Check): {p.device}")
+            return p.device
+            
+    print("=== NO AUTOMATIC MATCH FOUND ===")
+    return None
+
 class SerialReader(threading.Thread):
-    # Updated Regex to include D: (Distortion)
-    PATTERN = re.compile(r"V:([\d.]+),N:(-?\d+),F:([\d.]+),G:([\d.]+),D:([\d.]+)")
+    # Regex matches the Teensy Serial.printf format: V, N, N2, N3, N4, G, D, B
+    PATTERN = re.compile(r"V:([\d.]+),N:(-?\d+),N2:(-?\d+),N3:(-?\d+),N4:(-?\d+),G:([\d.]+),D:([\d.]+),B:([\d.]+)")
 
-    def __init__(self, port: str, baud: int, callback):
+    def __init__(self, port, data_callback, status_callback):
         super().__init__(daemon=True)
-        self.port     = port
-        self.baud     = baud
-        self.callback = callback
-        self._stop    = threading.Event()
-        self.ser      = None # Accessible handle for writing
+        self.port = port
+        self.data_callback = data_callback
+        self.status_callback = status_callback
+        self._stop = threading.Event()
+        self.ser = None
 
     def run(self):
+        if not self.port:
+            self.status_callback(False, "NO DEVICE DETECTED")
+            return
+
         try:
-            self.ser = serial.Serial(self.port, self.baud, timeout=1)
-        except serial.SerialException as exc:
-            print(f"[Serial] Could not open {self.port}: {exc}")
+            # Adding dtr/rts to force the connection open
+            self.ser = serial.Serial(self.port, 115200, timeout=0.1)
+            self.ser.dtr = True
+            self.ser.rts = True
+            self.status_callback(True, self.port)
+            print(f"--- CONNECTION ESTABLISHED ON {self.port} ---")
+        except serial.SerialException as e:
+            if "PermissionError" in str(e) or "Access is denied" in str(e):
+                self.status_callback(False, "PORT BUSY (CLOSE ARDUINO MONITOR)")
+            else:
+                self.status_callback(False, "CONNECTION FAILED")
+            print(f"ERROR: {e}")
             return
 
         while not self._stop.is_set():
             try:
-                line = self.ser.readline().decode("ascii", errors="ignore").strip()
-                m = self.PATTERN.search(line)
-                if m:
-                    self.callback(
-                        volume=float(m.group(1)),
-                        note=int(m.group(2)),
-                        freq=float(m.group(3)),
-                        gain=float(m.group(4)),
-                        dist=float(m.group(5))
-                    )
-            except Exception:
-                pass
-        if self.ser:
-            self.ser.close()
+                if self.ser.in_waiting > 0:
+                    line = self.ser.readline().decode("ascii", errors="ignore").strip()
+                    if not line: continue
+                    m = self.PATTERN.search(line)
+                    if m:
+                        self.data_callback(
+                            vol=float(m.group(1)),
+                            notes=[int(m.group(2)), int(m.group(3)),
+                                   int(m.group(4)), int(m.group(5))],
+                            bend=float(m.group(8))
+                        )
+            except Exception as e:
+                print(f"Runtime Error: {e}")
+                break
 
-    def stop(self):
-        self._stop.set()
-
-# ── GUI ──────────────────────────────────────────────────────────────────────
-BG        = "#1a1a2e"
-PANEL     = "#16213e"
-ACCENT    = "#e94560"
-TEXT      = "#eaeaea"
-DIM       = "#6c7a89"
-BAR_FULL  = "#e94560"
-BAR_EMPTY = "#2a2a4a"
+    def send(self, data: bytes):
+        if self.ser and self.ser.is_open:
+            self.ser.write(data)
 
 class SynthMonitor(tk.Tk):
-    def __init__(self, port: str):
+    def __init__(self):
         super().__init__()
-        self.title("Teensy MIDI Synth")
+        self.title("BC-26 ELECTRONIC KEYBOARD - RHYTHM EDITION")
+        self.configure(bg=CHASSIS_GRAY)
         self.resizable(False, False)
-        self.configure(bg=BG)
 
-        # fonts
-        self.big   = tkfont.Font(family="Helvetica", size=48, weight="bold")
-        self.med   = tkfont.Font(family="Helvetica", size=20, weight="bold")
-        self.small = tkfont.Font(family="Helvetica", size=12)
-        self.label_font = tkfont.Font(family="Helvetica", size=10)
+        # Fonts
+        self.lcd_font    = tkfont.Font(family="Courier", size=32, weight="bold")
+        self.label_font  = tkfont.Font(family="Arial Black", size=9)
+        self.logo_font   = tkfont.Font(family="Arial Black", size=24, weight="bold", slant="italic")
+        self.status_font = tkfont.Font(family="Courier", size=9)
 
         # State
+        self.voice_notes = [-1, -1, -1, -1]
         self._volume = 0.0
-        self._note   = -1
-        self._freq   = 0.0
-        self._gain   = 0.0
-        self._dist   = 0.0
-        self._dirty  = False
+        self._bend   = 1.0
         self._lock   = threading.Lock()
+        self._dirty  = False
+        
+        port = find_teensy_port()
+        self.is_offline = (port is None)
 
         self._build_ui()
-
-        # Start serial reader
-        self.reader = SerialReader(port, 115200, self._on_data)
+        
+        self.reader = SerialReader(port, self._on_data, self._on_status)
         self.reader.start()
-
-        # Poll for UI updates
-        self.after(40, self._refresh_ui)
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
-
-    def _on_dist_change(self, value):
-        """Sends distortion value to Teensy"""
-        if self.reader.ser and self.reader.ser.is_open:
-            try:
-                cmd = f"D:{float(value):.2f}\n"
-                self.reader.ser.write(cmd.encode())
-            except Exception as e:
-                print(f"Error sending D to Teensy: {e}")
-
-    def _on_wave_change(self):
-        """Sends waveform type to Teensy: format 'W:1\n'"""
-        if self.reader.ser and self.reader.ser.is_open:
-            try:
-                selection = self.wave_var.get()
-                cmd = f"W:{selection}\n"
-                self.reader.ser.write(cmd.encode())
-            except Exception as e:
-                print(f"Error sending W: {e}")
+        self._refresh_ui()
 
     def _build_ui(self):
-        PAD = 24
-        # Title bar
-        title_frame = tk.Frame(self, bg=BG)
-        title_frame.pack(fill="x", padx=PAD, pady=(PAD, 0))
-        tk.Label(title_frame, text="🎹  TEENSY SYNTH", font=self.med,
-                 bg=BG, fg=ACCENT).pack(side="left")
-        self.status_dot = tk.Label(title_frame, text="●", font=self.med,
-                                    bg=BG, fg=DIM)
-        self.status_dot.pack(side="right")
-
-        sep = tk.Frame(self, bg=ACCENT, height=2)
-        sep.pack(fill="x", padx=PAD, pady=(8, PAD))
-
-        # Main grid
-        main = tk.Frame(self, bg=BG)
-        main.pack(padx=PAD, pady=0)
-
-        # NOTE panel
-        note_panel = tk.Frame(main, bg=PANEL, bd=0)
-        note_panel.grid(row=0, column=0, padx=(0, 16), sticky="nsew")
-
-        tk.Label(note_panel, text="NOTE", font=self.label_font,
-                 bg=PANEL, fg=DIM).pack(pady=(18, 0))
-        self.note_lbl = tk.Label(note_panel, text="—", font=self.big,
-                                 bg=PANEL, fg=TEXT, width=8)
-        self.note_lbl.pack(padx=24)
-        self.freq_lbl = tk.Label(note_panel, text="— Hz", font=self.small,
-                                 bg=PANEL, fg=DIM)
-        self.freq_lbl.pack(pady=(0, 18))
-
-        # RIGHT panel
-        right = tk.Frame(main, bg=BG)
-        right.grid(row=0, column=1, sticky="nsew")
-
-        # Volume bar
-        vol_panel = tk.Frame(right, bg=PANEL)
-        vol_panel.pack(fill="x", pady=(0, 12))
-        vol_top = tk.Frame(vol_panel, bg=PANEL)
-        vol_top.pack(fill="x", padx=16, pady=(14, 6))
-        tk.Label(vol_top, text="VOLUME (pot A0)", font=self.label_font,
-                 bg=PANEL, fg=DIM).pack(side="left")
-        self.vol_pct = tk.Label(vol_top, text="0 %", font=self.label_font,
-                                bg=PANEL, fg=TEXT)
-        self.vol_pct.pack(side="right")
-        bar_bg = tk.Frame(vol_panel, bg=BAR_EMPTY, height=18)
-        bar_bg.pack(fill="x", padx=16, pady=(0, 14))
-        bar_bg.pack_propagate(False)
-        self.vol_bar = tk.Frame(bar_bg, bg=BAR_FULL, height=18)
-        self.vol_bar.place(x=0, y=0, relheight=1.0, relwidth=0.0)
-
-        # Velocity bar
-        vel_panel = tk.Frame(right, bg=PANEL)
-        vel_panel.pack(fill="x")
-        vel_top = tk.Frame(vel_panel, bg=PANEL)
-        vel_top.pack(fill="x", padx=16, pady=(14, 6))
-        tk.Label(vel_top, text="VELOCITY (MIDI)", font=self.label_font,
-                 bg=PANEL, fg=DIM).pack(side="left")
-        self.vel_pct = tk.Label(vel_top, text="0 %", font=self.label_font,
-                                bg=PANEL, fg=TEXT)
-        self.vel_pct.pack(side="right")
-        vel_bar_bg = tk.Frame(vel_panel, bg=BAR_EMPTY, height=18)
-        vel_bar_bg.pack(fill="x", padx=16, pady=(0, 14))
-        vel_bar_bg.pack_propagate(False)
-        self.vel_bar = tk.Frame(vel_bar_bg, bg="#4ecdc4", height=18)
-        self.vel_bar.place(x=0, y=0, relheight=1.0, relwidth=0.0)
-
-        # DISTORTION SLIDER
-        tk.Label(self, text="DISTORTION PRESET", fg=DIM, bg=BG, font=self.label_font).pack(pady=(20, 0))
-        self.dist_slider = tk.Scale(self, from_=0, to=1, resolution=0.01,
-                                     orient='horizontal', bg=BG, fg=ACCENT,
-                                     troughcolor=DIM, highlightthickness=0,
-                                     command=self._on_dist_change)
-        self.dist_slider.pack(fill='x', padx=PAD, pady=(0, PAD))
+        # Header / Branding
+        header = tk.Frame(self, bg=CHASSIS_GRAY, pady=10)
+        header.pack(fill="x")
+        tk.Label(header, text="BC-26", font=self.logo_font, bg=CHASSIS_GRAY, fg=LABEL_NAVY).pack(side="left", padx=20)
         
-        # WAVEFORM PICKER
-        self.wave_var = tk.IntVar(value=0) # 0 = Sine by default
-        wave_frame = tk.Frame(self, bg=BG)
-        wave_frame.pack(pady=10)
+        self.status_lbl = tk.Label(header, text="OFFLINE", font=self.status_font, bg=LCD_SCREEN, fg=LED_ON, width=25)
+        self.status_lbl.pack(side="right", padx=20)
 
-        waveforms = [("SINE", 0), ("TRI", 1), ("SAW", 2), ("SQR", 3)]
+        # Faceplate
+        faceplate = tk.Frame(self, bg=OFF_WHITE, bd=4, relief="sunken", padx=20, pady=20)
+        faceplate.pack(padx=15, pady=15)
 
-        for text, value in waveforms:
-            rb = tk.Radiobutton(wave_frame, text=text, variable=self.wave_var, value=value,
-                                indicatoron=0, width=10, bg=PANEL, fg=DIM, 
-                                selectcolor=ACCENT, activebackground=ACCENT,
-                                command=self._on_wave_change)
-            rb.pack(side="left", padx=5)
-            
-        # ATTACK SLIDER
-        tk.Label(self, text="ATTACK (ms)", fg=DIM, bg=BG, font=self.label_font).pack(pady=(10, 0))
-        self.attack_slider = tk.Scale(self, from_=1, to=2000, orient='horizontal', 
-                                      bg=BG, fg=ACCENT, troughcolor=DIM, highlightthickness=0,
-                                      command=lambda v: self._send_cmd("A", v))
-        self.attack_slider.set(10) # Default
-        self.attack_slider.pack(fill='x', padx=PAD)
+        # LCD Display for 4-Voice Polyphony
+        display_frame = tk.Frame(faceplate, bg="#111", bd=8, relief="raised")
+        display_frame.pack(fill="x", pady=(0, 20))
+        self.note_labels = []
+        for i in range(4):
+            lbl = tk.Label(display_frame, text="---", font=self.lcd_font, bg=LCD_SCREEN, fg=LED_ON, width=4)
+            lbl.pack(side="left", padx=4, pady=5)
+            self.note_labels.append(lbl)
 
-        # RELEASE SLIDER
-        tk.Label(self, text="RELEASE (ms)", fg=DIM, bg=BG, font=self.label_font).pack(pady=(10, 0))
-        self.release_slider = tk.Scale(self, from_=1, to=2000, orient='horizontal', 
-                                       bg=BG, fg=ACCENT, troughcolor=DIM, highlightthickness=0,
-                                       command=lambda v: self._send_cmd("R", v))
-        self.release_slider.set(500) # Default
-        self.release_slider.pack(fill='x', padx=PAD, pady=(0, PAD))
+        # Main Controls Area
+        ctrl_area = tk.Frame(faceplate, bg=OFF_WHITE)
+        ctrl_area.pack(fill="x")
 
+        # Column 1: Indicators (Vol Bar & Pitch Needle)
+        col1 = tk.Frame(ctrl_area, bg=OFF_WHITE)
+        col1.pack(side="left", padx=10, anchor="n")
 
-                # DRUM MACHINE SECTION
-        tk.Label(self, text="DRUM MACHINE", fg=ACCENT, bg=BG,
-                 font=self.med).pack(pady=(10, 10))
+        tk.Label(col1, text="VOLUME", font=self.label_font, bg=OFF_WHITE, fg=LABEL_NAVY).pack()
+        self.vol_canvas = tk.Canvas(col1, width=120, height=15, bg=LCD_SCREEN, highlightthickness=0)
+        self.vol_canvas.pack(pady=5)
+        self.vol_bar = self.vol_canvas.create_rectangle(0, 0, 0, 15, fill=GREEN_ON)
 
-        drum_frame = tk.Frame(self, bg=BG)
-        drum_frame.pack(pady=(0, PAD))
+        tk.Label(col1, text="PITCH BEND", font=self.label_font, bg=OFF_WHITE, fg=LABEL_NAVY).pack(pady=(10,0))
+        self.bend_canvas = tk.Canvas(col1, width=120, height=30, bg=LCD_SCREEN, highlightthickness=0)
+        self.bend_canvas.pack(pady=5)
+        self.bend_canvas.create_line(60, 5, 60, 25, fill="white", dash=(2,2)) # Center
+        self.bend_needle = self.bend_canvas.create_rectangle(58, 5, 62, 25, fill=LED_ON)
 
-        drum_buttons = [
-            ("KICK", "kick"),
-            ("SNARE", "snare"),
-            ("HIHAT", "hihat"),
-            ("TOM", "tom"),
-            ("COWBELL", "cowbell")
-        ]
+        # Column 2: Synth Parameters (Sliders)
+        col2 = tk.Frame(ctrl_area, bg=OFF_WHITE)
+        col2.pack(side="left", padx=20)
 
-        for i, (label, drum_id) in enumerate(drum_buttons):
-            btn = tk.Button(
-                drum_frame,
-                text=label,
-                width=10,
-                height=2,
-                bg=PANEL,
-                fg=TEXT,
-                activebackground=ACCENT,
-                activeforeground=TEXT,
-                relief="flat",
-                command=lambda d=drum_id: self._trigger_drum(d)
-            )
-            btn.grid(row=i // 3, column=i % 3, padx=8, pady=8)
+        params = [("DRIVE", "D", 0, 1.0), ("ATTACK", "A", 10, 1000), ("RELEASE", "R", 500, 2000)]
+        for label, tag, start, top in params:
+            f = tk.Frame(col2, bg=OFF_WHITE)
+            f.pack(side="left", padx=5)
+            tk.Label(f, text=label, font=self.label_font, bg=OFF_WHITE, fg=LABEL_NAVY).pack()
+            s = tk.Scale(f, from_=top, to=0, orient="vertical", length=100, 
+                         showvalue=0, bg=CHASSIS_GRAY, troughcolor=LCD_SCREEN,
+                         command=lambda v, t=tag: self._send_cmd(t, v))
+            s.set(start)
+            s.pack()
 
+        # Column 3: Rhythm & Voice (Buttons)
+        col3 = tk.Frame(ctrl_area, bg=OFF_WHITE)
+        col3.pack(side="left", padx=10, anchor="n")
 
+        tk.Label(col3, text="RHYTHM", font=self.label_font, bg=OFF_WHITE, fg=LABEL_NAVY).pack()
+        drum_f = tk.Frame(col3, bg=OFF_WHITE)
+        drum_f.pack(pady=5)
+        
+        for d_name, d_cmd in [("KICK","kick"), ("SNARE","snare"), ("HHAT","hihat"), ("TOM","tom"), ("BELL","cowbell")]:
+            btn = tk.Button(drum_f, text=d_name, width=7, font=("Arial", 7, "bold"),
+                            bg=LABEL_NAVY, fg="white", activebackground=DECO_ORANGE,
+                            command=lambda c=d_cmd: self._send_drum(c))
+            btn.pack(pady=1)
 
-    def _on_data(self, volume, note, freq, gain, dist):
+        tk.Label(col3, text="WAVEFORM", font=self.label_font, bg=OFF_WHITE, fg=LABEL_NAVY).pack(pady=(10,0))
+        self.wv_var = tk.IntVar(value=0)
+        for i, name in enumerate(["SINE", "TRI", "SQR", "SAW"]):
+            tk.Radiobutton(col3, text=name, variable=self.wv_var, value=i,
+                           indicatoron=0, font=("Arial", 7, "bold"), width=8,
+                           bg="#BBB", selectcolor=DECO_ORANGE,
+                           command=lambda: self._send_cmd("W", self.wv_var.get())).pack(pady=1)
+
+    def _send_cmd(self, tag, val):
+        if self.is_offline: return
+        msg = f"{tag}:{float(val)}\n".encode()
+        self.reader.send(msg)
+
+    def _send_drum(self, drum_type):
+        if self.is_offline: return
+        msg = f"DRUM:{drum_type}\n".encode()
+        self.reader.send(msg)
+
+    def _on_data(self, vol, notes, bend):
         with self._lock:
-            self._volume = volume
-            self._note   = note
-            self._freq   = freq
-            self._gain   = gain
-            self._dist   = dist
-            self._dirty  = True
+            self._volume = vol
+            self.voice_notes = notes
+            self._bend = bend
+            self._dirty = True
+
+    def _on_status(self, success, msg):
+        color = GREEN_ON if success else LED_ON
+        self.status_lbl.config(text=msg.upper(), fg=color)
 
     def _refresh_ui(self):
-        with self._lock:
-            if not self._dirty:
-                self.after(40, self._refresh_ui)
-                return
-            vol, note, freq, gain, dist = self._volume, self._note, self._freq, self._gain, self._dist
-            self._dirty = False
+        if self._dirty:
+            with self._lock:
+                # Update Volume Bar
+                vw = self.vol_canvas.winfo_width()
+                self.vol_canvas.coords(self.vol_bar, 0, 0, vw * self._volume, 15)
+                
+                # Update Pitch Needle
+                center = 60
+                # Map bend (roughly 0.8 to 1.2) to pixel offset
+                nx = max(5, min(115, center + (self._bend - 1.0) * 300))
+                self.bend_canvas.coords(self.bend_needle, nx-2, 5, nx+2, 25)
 
-        if note == -2: # POWER OFF
-            self.note_lbl.config(text="OFF", fg="#e74c3c")
-            self.status_dot.config(fg=DIM)
-            self.vol_bar.place(relwidth=0)
-            self.vel_bar.place(relwidth=0)
-        else:
-            self.status_dot.config(fg="#2ecc71")
-            self.note_lbl.config(text=midi_to_name(note),
-                                 fg=ACCENT if note >= 0 else DIM)
-            self.freq_lbl.config(text=f"{freq:.1f} Hz" if note >= 0 else "— Hz")
-            self.vol_pct.config(text=f"{int(vol * 100)} %")
-            self.vol_bar.place(relwidth=min(vol, 1.0))
-            self.vel_pct.config(text=f"{int(gain * 100)} %")
-            self.vel_bar.place(relwidth=min(gain, 1.0))
-
-        self.after(40, self._refresh_ui)
-
-    def _on_close(self):
-        self.reader.stop()
-        self.destroy()
-
-# DRUM MACHINE BUTTONS
-
-    def _trigger_drum(self, drum_name):
-        """Send drum trigger command to Teensy"""
-        if self.reader.ser and self.reader.ser.is_open:
-            try:
-                cmd = f"DRUM:{drum_name}\n"
-                self.reader.ser.write(cmd.encode())
-            except Exception as e:
-                print(f"Error sending drum trigger: {e}")
-
-
-
-
-
-
-     
-    def _send_cmd(self, tag, value):
-        """Helper to send A:val or R:val to Teensy"""
-        if self.reader.ser and self.reader.ser.is_open:
-            try:
-                cmd = f"{tag}:{float(value):.1f}\n"
-                self.reader.ser.write(cmd.encode())
-            except Exception as e:
-                print(f"Error sending {tag}: {e}")
-
-def pick_port(argv) -> str:
-    if len(argv) > 1: return argv[1]
-    ports = serial.tools.list_ports.comports()
-    if not ports: sys.exit(1)
-    if len(ports) == 1: return ports[0].device
-    for i, p in enumerate(ports): print(f"  [{i}] {p.device}")
-    return ports[int(input("Select port: "))].device
+                # Update LCD Note names
+                for i in range(4):
+                    self.note_labels[i].config(text=midi_to_name(self.voice_notes[i]))
+                
+                self._dirty = False
+        
+        self.after(50, self._refresh_ui)
 
 if __name__ == "__main__":
-    port = pick_port(sys.argv)
-    app = SynthMonitor(port)
+    app = SynthMonitor()
     app.mainloop()
